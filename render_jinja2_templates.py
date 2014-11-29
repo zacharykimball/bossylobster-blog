@@ -6,26 +6,23 @@ import os
 import re
 import subprocess
 import tempfile
+from xml.etree import ElementTree
 
 from jinja2 import Environment, PackageLoader
 from make_svg_from_latex import convert_equation
 
 
 ENV = Environment(loader=PackageLoader(__name__, 'content'))
-NODE_SCRIPT_TEMPLATE = u"""\
-katex = require('katex');
-value = katex.renderToString("%s");
-console.log(value);
-"""
-KATEX_BLOCK_TEMPLATE = u"""\
-<div class="katex-elt"><blockquote>
-%s
-</blockquote></div>"""
 TEMPLATE_HASHES_FILENAME = 'template_hashes.json'
 with open(TEMPLATE_HASHES_FILENAME, 'r') as fh:
     TEMPLATE_HASHES = json.load(fh)
 
-LATEX_IMG_TEMPLATE = '<img src="%s" alt="%s" class="latex-img"></img>'
+LATEX_IMG_TEMPLATE = ('<img src="%s" alt="%s" class="latex-img" '
+                      'style="width: %spx;"></img>')
+SVG_PATH = os.path.join(os.path.dirname(__file__),
+                        'content', 'latex_images')
+SVG_WIDTH_MULTIPLIER = 2.1
+SVG_BLOCK_WIDTH_MULTIPLIER = 2.75
 
 
 def escape_string(latex_str):
@@ -44,28 +41,25 @@ def utf8_to_html_entities(str_val):
     return ''.join(chars)
 
 
-def get_katex(latex_str, blockquote=False):
-    escaped = escape_string(latex_str)
-    script_content = NODE_SCRIPT_TEMPLATE % (escaped,)
-
-    temp_script = tempfile.mktemp()
-    with open(temp_script, 'w') as fh:
-        fh.write(script_content)
-
-    node_result = subprocess.check_output(['node', temp_script])
-    result = node_result.strip().decode('utf8')
-    result = utf8_to_html_entities(result)
-    if blockquote:
-        return KATEX_BLOCK_TEMPLATE % (result,)
-    else:
-        return result
+def get_svg_width(svg_name):
+    tree = ElementTree.parse(os.path.join(SVG_PATH, svg_name))
+    root = tree.getroot()
+    if root.tag != '{http://www.w3.org/2000/svg}svg':
+        raise ValueError((svg_name, 'not valid XML'))
+    width = root.attrib['width']
+    if width[-2:] != 'pt':
+        raise ValueError(('Invalid width', width))
+    return int(width[:-2])
 
 
 def get_latex_img(latex_str, blockquote=False, standalone=False):
-    png_path = convert_equation(latex_str, blockquote=blockquote,
+    svg_name = convert_equation(latex_str, blockquote=blockquote,
                                 standalone=standalone)
-    png_uri = '/latex_images/%s' % (png_path,)
-    result = LATEX_IMG_TEMPLATE % (png_uri, latex_str)
+    svg_width = get_svg_width(svg_name)
+    svg_uri = '/latex_images/%s' % (svg_name,)
+    multiplier = (SVG_BLOCK_WIDTH_MULTIPLIER if blockquote
+                  else SVG_WIDTH_MULTIPLIER)
+    result = LATEX_IMG_TEMPLATE % (svg_uri, latex_str, multiplier * svg_width)
     if blockquote:
         return '<blockquote class="latex-img">%s</blockquote>' % (result,)
     return result
@@ -106,8 +100,7 @@ def write_template(template):
 
     print 'Writing', new_filename
     with open(new_filename, 'wb') as fh:
-        rendered_file = template.render(get_katex=get_katex,
-                                        get_latex_img=get_latex_img)
+        rendered_file = template.render(get_latex_img=get_latex_img)
         fh.write(rendered_file)
         # Make sure the file has a trailing newline.
         if rendered_file[-1] != '\n':
